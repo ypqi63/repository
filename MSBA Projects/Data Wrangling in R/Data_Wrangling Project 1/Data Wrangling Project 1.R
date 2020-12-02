@@ -1,4 +1,4 @@
- # 1. Create a dataframe containing two columns:
+ ## 1. Create a dataframe containing two columns:
  # Method A and Method B. Populate the column Method A with 
  # values 1 through 9 and column Method B with values 10 through 18.
 
@@ -47,7 +47,7 @@ tapply(mtcars$disp, mtcars$am, mean)
 tapply(mtcars$disp, mtcars$gear, mean)
 
 
-# 3.Using the dplyr package in R, perform the following actions:
+## 3.Using the dplyr package in R, perform the following actions:
 library(dplyr)
 library(tidyverse)
 
@@ -113,7 +113,7 @@ tbl_cars%>%
   summarise(mean_km=mean(dist_km), mean_miles=mean(dist_miles))
 
 
-# 4. Refer to the dataset SupermarketTransactions available 
+## 4. Refer to the dataset SupermarketTransactions available 
 # in the form of csv file. Use the dataset and answer the 
 # following questions. If you decide to use R, then use a 
 # combination of apply and dplyr functions. If you decide to use Python, 
