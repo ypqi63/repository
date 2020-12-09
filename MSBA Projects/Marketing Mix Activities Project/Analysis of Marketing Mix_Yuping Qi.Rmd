@@ -1,0 +1,370 @@
+---
+title: "Analysis of Marketing Mix"
+author: 'Yuping Qi, Breno Albuquerque, Jacqueline Huang'
+output: pdf_document
+---
+
+```{r setup, include=FALSE, echo = T, message=F, warning=F}
+#install.packages("TSA")
+#install.packages("tsibble")
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(TSA)
+library(lubridate)
+library(readxl)
+library(ggcorrplot)
+library(tsibble)
+library(Hmisc)
+```
+
+**Data clearning**
+
+Import data
+```{r}
+data <- read_xlsx(path  = "Multimedia_Data.xlsx",sheet = 1)
+```
+
+Basic Exploration
+```{r}
+head(data)
+glimpse(data)
+summary(data)
+sapply(data, function(x) sum(x != 0))
+```
+
+Rename variables for easier referece
+```{r}
+data1 <- data %>%
+  rename(Sales = `Sales (units)`)
+```
+
+Drop the variables that shows useless data, such as SocialMedia and Banner that has 0 mostly
+```{r}
+data2 <- data1 %>%
+  select(-Banner, -SocialMedia)
+```
+
+Plot the explanatory variables against the response
+```{r}
+ggplot(data2 %>% gather(key = "Series", value = "Value", -Months), aes(x=Months, y=Value)) +geom_line() + facet_wrap(~Series, scales = "free")
+```
+
+Transform data and create the lag variable for seasonality
+```{r}
+#Auxiliary functions
+logx <- function(x) log(x+1)
+lag2 <- function(x) lag(x,2)
+
+data3 <- data2 %>%
+  mutate_at(c("Catalogs_ExistCust", "Catalogs_Winback", "Catalogs_NewCust", "Mailings", "Search", "Newsletter", "Retargeting", "Portals", "ADV_online", "ADV_Total", "ADV_Offline"), sqrt ) %>%
+  mutate(lag_Sales = dplyr::lag(Sales))
+```
+
+Glimpse of remainning data
+```{r}
+head(data3)
+cor_mat <- stats::cor(data3 %>% as.data.frame(), use = "pairwise.complete.obs")
+ggcorrplot(cor_mat, method = "circle", hc.order = T)
+```
+
+There seems to be significant correlations between multiple variables, so let's examine them further
+```{r}
+fit1<- lm(Sales~Catalogs_ExistCust+Catalogs_Winback+Catalogs_NewCust+Mailings+Search+Newsletter+Retargeting+Portals+lag_Sales+ADV_online+ADV_Total+ADV_Offline, data = data3)
+summary(fit1)
+```
+The results show a high R squared and low P value, indicating that the explanatory variables are significant.However, there are individual variables that are not independently significant, and some siginificant at only siginificant at 10%
+
+We suspect that there is multicollinearity and run the following test
+```{r}
+#pairwise correlation
+library(GGally)
+explan_var <- data3[,3:14]
+ggpairs(explan_var)
+
+cor(explan_var)
+```
+It is evident that even after variable transformation, there is still significant correlation between ADV_Offline and Catalog, ADV_Offline and Mailng, ADV_Online and Search, ADV_Online and Newsletter, ADV_Online and Retargeting, ADV_Online and Portals, and ADV_Total and ADV_Online and Offline
+
+The above findings make sense. ADV_Online emncompasses Search, Retargeting, Portals, and possibly Newsletters, and ADV_Offline includes Mailing, Newsletters, and Catalogs. Therefore, our team made the decision to drop the ADV_Total, ADV_Offline, ADV_Online variable
+```{r}
+data4 <- data3 %>%
+  select(-ADV_Total, -ADV_Offline, -ADV_online)
+head(data4)
+```
+
+**Model Development**
+
+Try fitting the regression model again 
+```{r}
+fit2<- lm(Sales ~. -Months, data = data4)
+summary(fit2)
+AIC(fit2)
+BIC(fit2)
+```
+
+Then we use backward stepwise regression to eliminate variables
+```{r}
+#eliminate Mailings which have the highest P value aside from lag variable
+fit3 <- lm(Sales ~. -Months -Mailings, data = data4)
+summary(fit3)
+AIC(fit3)
+BIC(fit3)
+```
+```{r}
+#eliminate Search which have the highest P value aside from lag variable
+fit4 <- lm(Sales ~. -Months -Mailings -Search, data = data4)
+summary(fit4)
+AIC(fit4)
+BIC(fit4)
+```
+
+```{r}
+#eliminate Retargeting which have the highest P value aside from lag variable
+fit5 <- lm(Sales ~. -Months -Mailings -Search -Retargeting, data = data4)
+summary(fit5)
+AIC(fit5)
+BIC(fit5)
+```
+```{r}
+#eliminate Newsletter which have the highest P value aside from lag variable
+fit6 <- lm(Sales ~. -Months -Mailings -Search -Retargeting -Newsletter, data = data4)
+summary(fit6)
+AIC(fit6)
+BIC(fit6)
+```
+```{r}
+#eliminate Catalogs_ExistCust which have the highest P value aside from lag variable
+fit7 <- lm(Sales ~. -Months -Mailings -Search -Retargeting -Newsletter -Catalogs_ExistCust, data = data4)
+summary(fit7)
+AIC(fit7)
+BIC(fit7)
+```
+```{r}
+#eliminate Catalogs_NewCust which have the highest P value aside from lag variable
+fit8 <- lm(Sales ~. -Months -Mailings -Search -Retargeting -Newsletter -Catalogs_ExistCust -Catalogs_NewCust, data = data4)
+summary(fit8)
+AIC(fit8)
+BIC(fit8)
+```
+
+According to the AIC/BIC development, we see that fit7 achieves the lowest AIC and BIC as well. Therefore, our focal model will be
+```{r}
+final <- lm(Sales ~ Catalogs_Winback + Catalogs_NewCust  + Portals + lag_Sales, data = data4)
+summary(final)
+```
+
+**Model Extension**
+```{r}
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(forecast)
+library(lmtest)
+library(ggplot2)
+library(stargazer)
+
+#Auxiliary functions
+logx <- function(x) log(x+1)
+lag2 <- function(x) lag(x,2)
+
+data <- read_xlsx(path  = "Multimedia_Data.xlsx",sheet = 1)%>%
+  rename(Sales = `Sales (units)`) %>%
+  select( -Banner, -SocialMedia, -ADV_Total, -ADV_Offline, -ADV_online)
+
+ggplot(data %>% gather(key = "Series", value = "Value", -Months), aes(x=Months, y=Value)) +geom_line() + facet_wrap(~Series, scales = "free")
+
+budget <- data %>% tail(12)
+
+data_exp <- data %>%
+  mutate_all(.funs = list(log = logx)) %>% 
+  mutate_all(.funs = list(lag = lag, lag2 = lag2))
+
+# Correlation
+require(ggcorrplot)
+cor_mat2 <- cor(data_exp, use = "pairwise.complete.obs")
+ggcorrplot(cor_mat2, hc.order = T)
+```
+
+We have autocorrelation and seasonality issues. Let's deal with them. But first, lets get our data ready .
+```{r}
+pacf(data_exp$Sales)
+acf(data_exp$Sales)
+
+pacf(data_exp$Catalogs_ExistCust_log)
+acf(data_exp$Catalogs_ExistCust_log)
+
+pacf(data_exp$Catalogs_Winback_log)
+acf(data_exp$Catalogs_Winback_log)
+
+pacf(data_exp$Catalogs_NewCust_log)
+acf(data_exp$Catalogs_NewCust_log)
+
+pacf(data_exp$Portals_log)
+acf(data_exp$Portals_log)
+
+pacf(data_exp$Search_log)
+acf(data_exp$Search_log)
+
+pacf(data_exp$Newsletter_log)
+acf(data_exp$Newsletter_log)
+```
+
+Building the extension model
+```{r}
+# Xreg
+
+Covars <- cbind(
+  Month_log = data_exp$Months_log,
+  Portals_log = data_exp$Portals_log,
+  Winback_Newsletter_log_lag = data_exp$Catalogs_Winback_log_lag * data_exp$Newsletter_log_lag ,
+  ExistCust_Newsletter_log_lag = data_exp$Catalogs_ExistCust_log_lag * data_exp$Newsletter_log_lag
+)
+  
+modfin <- arima(data_exp$Sales, xreg = Covars, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))   #-61.72
+
+summary(modfin)
+coeftest(modfin)
+acf(modfin$residuals[3:nrow(data_exp)])
+pacf(modfin$residuals[3:nrow(data_exp)])
+
+plot(data_exp$Sales, col = "blue")
+lines(fitted(modfin))
+```
+
+Extension model
+For the extension model, our team dedicated to asses for the presence of several marketing industry expected effects. 
+[https://www.accenture.com/_acnmedia/pdf-92/accenture-market-mix-optimization.pdf]
+
+Seasonality
+ Sales exhibits a strong seasonal behavior. This means that cosmetics tend to sell more during certain periods of the year. Units sold during the current month is correlated to units sold twelve months ago. This patterns explains a great amount of sales variation in the sample. Accordingly to our extended model Sales (in log) on a specific month departs from almost 50% of what was sold (in log) in the same month last year.
+
+```{r}
+mod1 <- arima(data_exp$Sales, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+```
+
+Intercept and Deterministic Time Trend
+Does Sales follows a time trend? Our analysis concluded that, despite any investiments in advertising, units sold tend to grow in time, on a decreasing rate. This result may be due to product earned media, organic aceptance rate or market and/or economic growth during the period. We didn't control for macroeconomic or industry specific variables. Jointly with baseline revenue (intercept was always signficant), this effect accounts for the expected sales in absence of any advertising expenditure. 
+
+```{r}
+Covars2 <- cbind(
+  Month = data_exp$Months
+)
+mod2 <- arima(data_exp$Sales, xreg = Covars2, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+
+# Covars2 <- cbind(
+#   Month_log = data_exp$Months_log,
+#   Portals_log = data_exp$Portals_log,
+#   Winback_Newsletter_log_lag = data_exp$Catalogs_Winback_log_lag * data_exp$Newsletter_log_lag ,
+#   ExistCust_Newsletter_log_lag = data_exp$Catalogs_ExistCust_log_lag * data_exp$Newsletter_log_lag
+# )
+# mod2 <- arima(data_exp$Sales_log, xreg = Covars2, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+
+
+# Carryover effect (Adstock)
+# When controled to seasonal effect, sales demonstrated few or no signal of carryover effects. It seams that after discounting for time trend and seasonality, sales of cosmetics from previous months can't explain what happens to current month sales. Thus, we decided to drop carryover term from our final model
+
+
+Covars3 <- cbind(
+  Month = data_exp$Months
+)
+mod3 <- arima(data_exp$Sales, xreg = Covars2, order = c(1,0,0), seasonal = list(order = c(1,0,0), period = 12))
+
+stargazer(mod1, mod2, mod3)
+
+# Covars <- cbind(
+#   Month_log = data_exp$Months_log,
+#   Portals_log = data_exp$Portals_log,
+#   Winback_Newsletter_log_lag = data_exp$Catalogs_Winback_log_lag * data_exp$Newsletter_log_lag ,
+#   ExistCust_Newsletter_log_lag = data_exp$Catalogs_ExistCust_log_lag * data_exp$Newsletter_log_lag
+# )
+# mod3 <- arima(data_exp$Sales_log, xreg = Covars, order = c(1,0,0), seasonal = list(order = c(1,0,0), period = 12))
+```
+
+Diminushing returns (Adstock)
+The extended model confirmed for diminushing return (saturation) on advertising expenditure. Log specification (for all covariates) better fits Sales when compared to the alternative (square root). We didn't try for other especifications. 
+
+```{r}
+Covars4a <- cbind(
+  Month_sqrt = sqrt(data_exp$Months),
+  Portals_sqrt = sqrt(data_exp$Portals),
+  Catalog_ExistCust_sqrt = sqrt(data_exp$Catalogs_ExistCust),
+  Catalog_Winback_sqrt = sqrt(data_exp$Catalogs_NewCust)
+)
+mod4a <- arima(data_exp$Sales, xreg = Covars4a, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+
+
+Covars4b <- cbind(
+  Month_log = (data_exp$Months_log),
+  Portals_log = (data_exp$Portals_log),
+  Catalog_ExistCust_log = (data_exp$Catalogs_ExistCust_log),
+  Catalog_Winback_log = (data_exp$Catalogs_NewCust_log)
+)
+
+mod4b <- arima(data_exp$Sales, xreg = Covars4b, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+
+
+summary(mod4b)
+
+# Covars4 <- cbind(
+#   Month_sqrt = sqrt(data_exp$Months),
+#   Portals_sqrt = sqrt(data_exp$Portals),
+#   Winback_Newsletter_sqrt_lag = sqrt(data_exp$Catalogs_Winback_lag) * sqrt(data_exp$Newsletter_lag) ,
+#   ExistCust_Newsletter_sqrt_lag = sqrt(data_exp$Catalogs_ExistCust_lag) * sqrt(data_exp$Newsletter_lag)
+# )
+# mod4 <- arima(data_exp$Sales_log, xreg = Covars4, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+```
+
+Lagged effect 
+We wanted to test if any advertising activitity would take longer than a month to impact sales. For instance, we expected that investiments in Catalog advertising  would require more time than online advertising before exerting influence on sales. Since Catalogs demands a long time to print and deliver, returns on spends in this type of media may not be as immediate as other medias. Out team found that catalog advertising actually has always a one-month-lagged impact. After accounting for the proper lag, catalog expenditure coefficient turned to positive - the expected sign. 
+
+```{r}
+Covars5 <- cbind(
+  Month_log = data_exp$Months_log,
+  Portals_log = data_exp$Portals_log,
+  Catalog_Winback_log = data_exp$Catalogs_Winback_log,
+  Catalog_Winback_log_lag1 = data_exp$Catalogs_Winback_log_lag  ,
+  Catalog_ExistCust_log_lag1 = data_exp$Catalogs_ExistCust_log_lag
+)
+mod5 <- arima(data_exp$Sales, xreg = Covars5, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))
+summary(mod5)
+coeftest(mod5)
+```
+
+Synergy 
+We tested for synergy in medias. Apparently, newsletter plays a complementary role to catalogs. The magnitude of the impacts on sales caused by investments in catalog  (Existing Customers and Winback)  firmly depends on the value spend on newsletters.
+
+```{r}
+Covars <- cbind(
+  Month_log = data_exp$Months_log,
+  Portals_log = data_exp$Portals_log,
+  Catalog_Winback_log= data_exp$Catalogs_Winback_log,
+  Winback_Newsletter_log_lag = data_exp$Catalogs_Winback_log_lag * data_exp$Newslettr_log_lag ,
+  ExistCust_Newsletter_log_lag = data_exp$Catalogs_ExistCust_log_lag * data_exp$Newsletter_log_lag
+)
+
+modfin <- arima(data_exp$Sales, xreg = Covars, order = c(0,0,0), seasonal = list(order = c(1,0,0), period = 12))   #-61.72
+
+summary(modfin)
+coeftest(modfin)
+acf(modfin$residuals[3:nrow(data_exp)])
+pacf(modfin$residuals[3:nrow(data_exp)])
+
+plot(data_exp$Sales, col = "blue")
+lines(fitted(modfin))
+
+
+stg2 <- stargazer(mod4a,mod4b, mod5, modfin)
+
+# Long run Elasticity
+Data_means <- data %>% summarise_all(mean, na.rm=T)
+Coeffic <- coef(modfin)
+
+LR_elastic <- cbind(
+  Winback = (Coeffic["Catalog_Winback_log"]+ Coeffic["Winback_Newsletter_log_lag"]*log(Data_means$Newsletter))/Data_means$Sales,
+  Catalog_ExistCust = Coeffic["ExistCust_Newsletter_log_lag"]*log(Data_means$Newsletter)/Data_means$Sales,
+  Portals = Coeffic["Portals_log"]/Data_means$Sales,
+  Newsletter = (Coeffic["ExistCust_Newsletter_log_lag"]*log(Data_means$Catalogs_ExistCust) + Coeffic["Winback_Newsletter_log_lag"]*log(Data_means$Catalogs_Winback))/Data_means$Sales
+  )
+```
